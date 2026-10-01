@@ -1,4 +1,4 @@
-import { chromium } from 'playwright';
+import { chromium } from 'playwright-core';
 import http from 'node:http';
 import net from 'node:net';
 import { type Socket } from 'node:net';
@@ -7,7 +7,7 @@ import { detectPlatform } from './platform';
 import { resolve } from 'node:path';
 import { access } from 'node:fs/promises';
 import { ScanError } from './scan-error';
-
+import { parseNetworkData } from './network-data';
 // Todas las conexiones del navegador pasan por este proxy local. Se resuelve y
 // fija la IP pública para evitar accesos a la red privada y DNS rebinding.
 async function publicProxy() {
@@ -44,11 +44,14 @@ export async function renderPage(url: string) {
   const proxy = await publicProxy();
   let browser;
   try {
-    browser = await chromium.launch({headless:true,timeout:10000,proxy:{server:proxy.url,bypass:'<-loopback>'},args:['--disable-quic','--force-webrtc-ip-handling-policy=disable_non_proxied_udp']});
+    const cloud = process.env.VERCEL && process.platform === 'linux' ? (await import('@sparticuz/chromium')).default : null;
+    browser = await chromium.launch({...(cloud?{executablePath:await cloud.executablePath()}:{}),headless:true,timeout:10000,proxy:{server:proxy.url,bypass:'<-loopback>'},args:[...(cloud?cloud.args:[]),'--disable-quic','--force-webrtc-ip-handling-policy=disable_non_proxied_udp']});
     const platform=detectPlatform(url);
     const sessionPath=resolve(process.env.SOCIAL_SESSION_DIR||'.local/sessions',`${platform}.json`);
-    const hasSession=platform!=='web'&&await access(sessionPath).then(()=>true,()=>false);
-    const context = await browser.newContext({locale:'en-US',viewport:{width:1280,height:900},serviceWorkers:'block',acceptDownloads:false,...(hasSession?{storageState:sessionPath}:{})});
+    const sessionEnv=platform==='web'?undefined:process.env[`SOCIAL_SESSION_${platform.toUpperCase()}`];
+    const hasSession=!!sessionEnv || platform!=='web'&&await access(sessionPath).then(()=>true,()=>false);
+    const storageState=sessionEnv?JSON.parse(sessionEnv):sessionPath;
+    const context = await browser.newContext({locale:'en-US',viewport:{width:1280,height:900},serviceWorkers:'block',acceptDownloads:false,...(hasSession?{storageState}:{})});
     await context.route('**/*',async route=>{
       if (['image','media','font'].includes(route.request().resourceType()) || !/^https?:/.test(route.request().url())) return route.abort();
       return route.continue();
@@ -58,8 +61,9 @@ export async function renderPage(url: string) {
     // Solo se observan respuestas que la página solicitó; no se invocan APIs privadas.
     page.on('response',response=>{
       if(response.request().isNavigationRequest()&&response.frame()===page.mainFrame())status=response.status();
-      if(platform!=='x'||!response.ok()||!/(UserTweets|TweetDetail|UserByScreenName)/.test(response.url())||networkData.length>=8)return;
-      const task=(async()=>{try{const body=await response.text();if(body.length>1_000_000||bytes+body.length>2_000_000)return;const json=JSON.parse(body);bytes+=body.length;networkData.push(JSON.stringify(json).replaceAll('<','\\u003c'));}catch{/* Una respuesta ilegible no es una métrica cero. */}})();pending.push(task);
+      const relevant=platform==='x'?/(UserTweets|TweetDetail|UserByScreenName)/.test(response.url()):platform==='facebook'?/graphql/.test(response.url()):platform==='tiktok'?/item_list|item\/detail|post\/item_list/.test(response.url()):false;
+      if(!relevant||!response.ok()||pending.length>=16)return;
+      const task=(async()=>{try{const body=await response.text();if(body.length>1_000_000||bytes+body.length>2_000_000)return;bytes+=body.length;for(const json of parseNetworkData(body))networkData.push(JSON.stringify(json).replaceAll('<','\\u003c'));}catch{/* Una respuesta ilegible no es una métrica cero. */}})();pending.push(task);
     });
     try{await page.goto(url,{waitUntil:'domcontentloaded',timeout:20000});}
     catch(e){throw new ScanError(e instanceof Error?e.message:'No se pudo navegar.',status,{platform,sessionLoaded:hasSession});}
@@ -73,9 +77,15 @@ export async function renderPage(url: string) {
         if(step<2){await page.mouse.wheel(0,850);await page.waitForTimeout(700);}
       }
       await Promise.race([Promise.allSettled(pending),page.waitForTimeout(1500)]);
-    }else await page.waitForTimeout(2500);
+    }else {
+      await page.waitForTimeout(3500);
+      if(platform==='facebook'||platform==='tiktok'){await page.mouse.wheel(0,850);await page.waitForTimeout(1500);}
+    }
+    await Promise.race([Promise.allSettled(pending),page.waitForTimeout(1000)]);
+    const visible=await page.locator('body').innerText();
+    if(platform==='tiktok'&&/drag the slider|fit the puzzle|verify to continue|complete the puzzle/i.test(visible))throw new ScanError('TikTok solicita una verificación de acceso. Abre el perfil en tu navegador, completa la verificación y exporta una sesión actualizada.',status,{platform,sessionLoaded:hasSession,reason:'captcha'});
     let html=await page.content();
-    if(platform==='x')html+=fragments.join('')+networkData.map(data=>`<script type="application/json">${data}</script>`).join('');
+    html+=fragments.join('')+networkData.map(data=>`<script type="application/json">${data}</script>`).join('');
     if(Buffer.byteLength(html)>7_000_000)throw new ScanError('La página renderizada supera 7 MB.',status);
     return {html,status,finalUrl:page.url(),hasSession};
   } catch(e) {

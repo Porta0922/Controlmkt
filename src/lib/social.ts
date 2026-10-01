@@ -1,6 +1,7 @@
 import { load } from 'cheerio';
 import { createHash } from 'node:crypto';
 import { detectPlatform, type Platform } from './platform';
+import { extractFacebook } from './facebook';
 
 export type Metrics = Record<string,number>;
 export type Post = {id:string;text:string;url:string;metrics:Metrics;kind?:'video'|'post'|'unknown';publishedAt?:string};
@@ -29,29 +30,29 @@ function visibleCounts(text:string):Metrics {
 export function extractSocial(html:string,url:string):SocialSnapshot {
  const platform=detectPlatform(url),$=load(html),posts=new Map<string,Post>();const metrics:Metrics={};
  const target=new URL(url);const parts=target.pathname.split('/').filter(Boolean);const handle=parts[0]?.replace(/^@/,'').toLowerCase();
- const isPost=/\/(?:status|p|reel|video|posts|videos)\//.test(target.pathname)||target.searchParams.has('story_fbid');
- const postId=isPost?(target.searchParams.get('story_fbid')||parts.at(-1)):undefined;
+ const isPost=/\/(?:status|p|reel|video|posts|videos)\//.test(target.pathname)||target.searchParams.has('story_fbid')||platform==='facebook'&&target.searchParams.has('v');
+ const postId=isPost?(target.searchParams.get('story_fbid')||target.searchParams.get('v')||parts.at(-1)):undefined;
  const add=(post:Post,author?:string)=>{if(posts.size>=20)return;if(isPost&&postId&&post.id!==postId&&!post.url.includes(postId))return;if(!isPost&&author&&handle&&author.replace(/^@/,'').toLowerCase()!==handle)return;try{const link=new URL(post.url);if(!['http:','https:'].includes(link.protocol)||detectPlatform(link.toString())!==platform)post.url=url;}catch{post.url=url;}posts.set(post.id,post);};
  let visits=0;
  function visit(value:unknown,depth=0){
   if(depth>35||++visits>40000)return;
   if(Array.isArray(value)){for(const child of value)visit(child,depth+1);return;}
   const row=obj(value);if(!Object.keys(row).length)return;
-  const stats={...counts(row),...counts(obj(row.stats)),...counts(obj(row.legacy))};const viewCount=parseCount(obj(row.views).count);if(viewCount!==undefined)stats.views=viewCount;
+  const stats={...counts(row),...counts(obj(row.stats)),...counts(obj(row.statsV2)),...counts(obj(row.legacy))};const viewCount=parseCount(obj(row.views).count);if(viewCount!==undefined)stats.views=viewCount;
   const username=str(row.username||row.uniqueId||row.screen_name||obj(row.legacy).screen_name);
   if(!isPost&&username&&username.toLowerCase()===handle)Object.assign(metrics,stats);
   const userInfo=obj(row.userInfo);const user=obj(userInfo.user);
-  if(!isPost&&str(user.uniqueId).toLowerCase()===handle)Object.assign(metrics,counts(obj(userInfo.stats)));
+  if(!isPost&&str(user.uniqueId).toLowerCase()===handle)Object.assign(metrics,counts(obj(userInfo.stats)),counts(obj(userInfo.statsV2)));
   const captionEdges=obj(row.edge_media_to_caption).edges;
   const caption=Array.isArray(captionEdges)?str(obj(obj(captionEdges[0]).node).text):'';
   const legacy=obj(row.legacy);const captionObj=obj(row.caption);
   const content=str(row.desc||row.full_text||legacy.full_text||caption||captionObj.text||obj(row.message).text||(typeof row.caption==='string'?row.caption:''));
   const id=str(row.shortcode||row.shortCode||row.rest_id||row.id_str||row.post_id||row.pk||row.id);
-  if(id && content && Object.keys(stats).some(k=>['likes','comments','shares','views','reactions'].includes(k))){
+  if(id && (content||platform==='tiktok'&&row.video) && Object.keys(stats).some(k=>['likes','comments','shares','views','reactions'].includes(k))){
    const author=obj(row.author||row.owner||row.user||obj(obj(obj(row.core).user_results).result));const authorName=str(author.uniqueId||author.username||author.screen_name||obj(author.legacy).screen_name);
    const postUrl=str(row.url||row.webVideoUrl)|| (platform==='instagram'?`https://www.instagram.com/p/${str(row.shortcode||row.shortCode)}/`:platform==='tiktok'?`https://www.tiktok.com/@${authorName}/video/${id}`:platform==='x'?`https://x.com/${authorName||handle}/status/${id}`:url);
    const media=obj(row.extended_entities||legacy.extended_entities).media;const isVideo=platform==='tiktok'||row.is_video===true||Number(row.media_type)===2||row.video!==undefined||Array.isArray(media)&&media.some(item=>['video','animated_gif'].includes(str(obj(item).type)));
-   add({id:platform==='instagram'?str(row.shortcode||row.shortCode)||id:id,text:content.slice(0,10000),url:postUrl,metrics:stats,kind:isVideo?'video':platform==='x'||row.is_video===false||row.media_type===1?'post':'unknown',publishedAt:str(row.createTimeISO||row.taken_at_timestamp||row.createTime||row.created_at||legacy.created_at)||undefined},authorName);
+   add({id:platform==='instagram'?str(row.shortcode||row.shortCode)||id:id,text:content.slice(0,10000)||'Video sin descripción',url:postUrl,metrics:stats,kind:isVideo?'video':platform==='x'||row.is_video===false||row.media_type===1?'post':'unknown',publishedAt:str(row.createTimeISO||row.taken_at_timestamp||row.createTime||row.created_at||legacy.created_at)||undefined},authorName);
    return; // Evita volver a agregar el legacy de un autor filtrado como si fuese propio.
   }
   // JSON-LD de una publicación: contadores semánticos, sin adivinar números.
@@ -62,9 +63,22 @@ export function extractSocial(html:string,url:string):SocialSnapshot {
   }
   for(const child of Object.values(row))if(child&&typeof child==='object')visit(child,depth+1);
  }
- $('script[type="application/json"],script[type="application/ld+json"],script#__NEXT_DATA__,script#SIGI_STATE,script#__UNIVERSAL_DATA_FOR_REHYDRATION__').each((_i,element)=>{const text=$(element).text();if(text.length>2_000_000)return;try{visit(JSON.parse(text));}catch{/* No se ejecutan scripts del sitio. */}});
+ $('script[type="application/json"],script[type="application/ld+json"],script#__NEXT_DATA__,script#SIGI_STATE,script#__UNIVERSAL_DATA_FOR_REHYDRATION__').each((_i,element)=>{const text=$(element).text();if(text.length>2_000_000)return;visits=0;try{visit(JSON.parse(text));}catch{/* No se ejecutan scripts del sitio. */}});
+ if(platform==='facebook')for(const post of extractFacebook(html,url,parseCount))posts.set(post.id,post);
  const description=$('meta[property="og:description"]').attr('content')||$('meta[name="description"]').attr('content')||'';
  if(!isPost)Object.assign(metrics,visibleCounts(description));
+ if(platform==='facebook'&&!isPost){const visible=$.root().clone();visible.find('script,style').remove();Object.assign(metrics,visibleCounts(visible.text()));}
+ if(platform==='tiktok'){
+  $('[data-e2e="user-post-item"], [data-e2e="user-post-item-list"] a[href*="/video/"]').each((_i,element)=>{
+   const card=$(element);const link=card.is('a')?card.attr('href'):card.find('a[href*="/video/"]').first().attr('href');if(!link)return;
+   let parsed;try{parsed=new URL(link,url);}catch{return;}const match=parsed.pathname.match(/^\/@([^/]+)\/video\/(\d+)/);if(!match)return;
+   const existing=posts.get(match[2]);const views=parseCount(card.find('[data-e2e="video-views"], [data-e2e="video-views-count"]').first().text());
+   add({id:match[2],text:existing?.text||card.find('img').attr('alt')||card.find('[data-e2e="video-desc"]').text()||'Video sin descripción',url:parsed.toString(),metrics:{...existing?.metrics,...(views===undefined?{}:{views})},kind:'video',publishedAt:existing?.publishedAt},match[1]);
+  });
+  if(isPost){const id=postId!;const current=posts.get(id);const detail:Metrics={};for(const[key,selector]of Object.entries({likes:'like-count',comments:'comment-count',shares:'share-count'})){const value=parseCount($(`[data-e2e="${selector}"]`).first().text());if(value!==undefined)detail[key]=value;}
+   if(current)posts.set(id,{...current,metrics:{...current.metrics,...detail}});else if(Object.keys(detail).length)add({id,text:$('[data-e2e="browse-video-desc"], [data-e2e="video-desc"]').first().text()||'Video sin descripción',url,metrics:detail,kind:'video'});
+  }
+ }
  if(platform==='x'){
   $('article[data-testid="tweet"]').each((_i,element)=>{
    const article=$(element);const link=article.find('a[href*="/status/"]').filter((_j,a)=>Boolean($(a).find('time').length)).first().attr('href')||article.find('a[href*="/status/"]').filter((_j,a)=>!/\/(photo|video|analytics)\//.test($(a).attr('href')||'')).first().attr('href')||'';let path;try{path=new URL(link,'https://x.com').pathname;}catch{return;}const match=path.match(/^\/([^/]+)\/status\/(\d+)/);if(!match)return;
