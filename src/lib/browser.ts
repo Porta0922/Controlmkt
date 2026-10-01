@@ -46,7 +46,7 @@ export async function renderPage(url: string) {
   let browser;
   try {
     const cloud = process.env.VERCEL && process.platform === 'linux' ? (await import('@sparticuz/chromium')).default : null;
-    browser = await chromium.launch({...(cloud?{executablePath:await cloud.executablePath()}:{}),headless:true,timeout:10000,proxy:{server:proxy.url,bypass:'<-loopback>'},args:[...(cloud?cloud.args:[]),'--disable-quic','--force-webrtc-ip-handling-policy=disable_non_proxied_udp']});
+    browser = await chromium.launch({...(cloud?{executablePath:await cloud.executablePath()}:{}),headless:true,timeout:10000,proxy:{server:proxy.url,bypass:'<-loopback>'},args:[...(cloud?cloud.args.filter(arg=>arg!=='--single-process'):[]),'--disable-quic','--force-webrtc-ip-handling-policy=disable_non_proxied_udp']});
     const platform=detectPlatform(url);
     const sessionPath=resolve(process.env.SOCIAL_SESSION_DIR||'.local/sessions',`${platform}.json`);
     const sessionEnv=platform==='web'?undefined:process.env[`SOCIAL_SESSION_${platform.toUpperCase()}`];
@@ -68,7 +68,7 @@ export async function renderPage(url: string) {
       const task=(async()=>{try{const body=await response.text();if(body.length>1_000_000||bytes+body.length>2_000_000)return;bytes+=body.length;for(const json of parseNetworkData(body))networkData.push(JSON.stringify(json).replaceAll('<','\\u003c'));}catch{/* Una respuesta ilegible no es una métrica cero. */}})();pending.push(task);
     });
     try{await page.goto(url,{waitUntil:'domcontentloaded',timeout:20000});}
-    catch(e){throw new ScanError(e instanceof Error?e.message:'No se pudo navegar.',status,{platform,sessionLoaded:hasSession});}
+    catch(e){const closed=e instanceof Error&&/Target page, context or browser has been closed/.test(e.message);throw new ScanError(closed?'El navegador de lectura se cerró inesperadamente. Reintenta la actualización.':`No se pudo abrir ${platform==='web'?'la página':platform}. Reintenta en unos momentos.`,status,{platform,sessionLoaded:hasSession,reason:closed?'browser_closed':'navigation_failed'});}
     if(status>=400)throw new ScanError(`${platform==='x'?'X':platform} respondió HTTP ${status}. ${platform==='x'?hasSession?'Renueva la sesión con npm run social:login -- x y reintenta.':'Guarda una sesión con npm run social:login -- x y reintenta.':'Reintenta más tarde.'}`,status,{platform,sessionLoaded:hasSession});
     const fragments:string[]=[];
     if(platform==='x'){
