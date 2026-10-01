@@ -7,6 +7,7 @@ import { publicTarget } from './public-url';
 import { renderPage } from './browser';
 import { detectPlatform, platformNames } from './platform';
 import { extractSocial, digest, type SocialSnapshot } from './social';
+import { ScanError } from './scan-error';
 export type ScanResult = {status:number;title:string;content:string;hash:string;platform:ReturnType<typeof detectPlatform>;provider:'http'|'playwright';snapshot?:SocialSnapshot};
 async function download(input: string, redirects = 0): Promise<{status: number; html: string}> {
   const {url,address} = await publicTarget(validateUrl(input));
@@ -27,11 +28,13 @@ export async function scan(url:string,method='auto'):Promise<ScanResult> {
  const platform=detectPlatform(url);const provider=platform!=='web'||method==='browser'?'playwright':'http';
  const page=provider==='playwright'?await renderPage(url):await download(url);const {status,html}=page;
  if(platform!=='web'){
-  if(status>=400)throw new Error(`${platformNames[platform]} respondió HTTP ${status}. No hay estadísticas confirmadas.`);
+  if(status>=400)throw new ScanError(`${platformNames[platform]} respondió HTTP ${status}. No hay estadísticas confirmadas.`,status);
   const finalUrl='finalUrl' in page&&typeof page.finalUrl==='string'?page.finalUrl:url;
   if(detectPlatform(finalUrl)!==platform)throw new Error('La red redirigió a otro sitio; no se confirmaron estadísticas.');
-  const snapshot=extractSocial(html,finalUrl);const content=snapshot.posts.map(p=>p.text).join('\n\n');
-  return {status,title:`${platformNames[platform]} · ${snapshot.posts.length} publicaciones en muestra`,content,hash:digest(snapshot.posts.map(({metrics:_metrics,...post})=>post)),platform,provider,snapshot};
+  try{
+   const snapshot=extractSocial(html,finalUrl);const content=snapshot.posts.map(p=>p.text).join('\n\n');
+   return {status,title:`${platformNames[platform]} · ${snapshot.posts.length} publicaciones en muestra`,content,hash:digest(snapshot.posts.map(post=>({id:post.id,text:post.text,url:post.url}))),platform,provider,snapshot};
+  }catch(e){throw new ScanError(e instanceof Error?e.message:'No se pudieron extraer estadísticas.',status,{platform,sessionLoaded:'hasSession'in page?page.hasSession:false});}
  }
  const $=load(html);const title=$('title').first().text().trim();$('script,style,nav,footer').remove();
  const content=($('main').text()||$('body').text()).replace(/\s+/g,' ').trim().slice(0,50000);

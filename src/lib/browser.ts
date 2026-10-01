@@ -6,6 +6,7 @@ import { publicTarget } from './public-url';
 import { detectPlatform } from './platform';
 import { resolve } from 'node:path';
 import { access } from 'node:fs/promises';
+import { ScanError } from './scan-error';
 
 // Todas las conexiones del navegador pasan por este proxy local. Se resuelve y
 // fija la IP pública para evitar accesos a la red privada y DNS rebinding.
@@ -52,12 +53,31 @@ export async function renderPage(url: string) {
       if (['image','media','font'].includes(route.request().resourceType()) || !/^https?:/.test(route.request().url())) return route.abort();
       return route.continue();
     });
-    const page=await context.newPage();
-    const response=await page.goto(url,{waitUntil:'domcontentloaded',timeout:20000});
-    // Una espera corta deja renderizar los contadores; no espera tráfico infinito.
-    await page.waitForTimeout(2500);
-    const html=await page.content();if(Buffer.byteLength(html)>5_000_000)throw new Error('La página renderizada supera 5 MB.');
-    return {html,status:response?.status() ?? 0,finalUrl:page.url(),hasSession};
+    const page=await context.newPage();let status=0;
+    const networkData:string[]=[];const pending:Promise<void>[]=[];let bytes=0;
+    // Solo se observan respuestas que la página solicitó; no se invocan APIs privadas.
+    page.on('response',response=>{
+      if(response.request().isNavigationRequest()&&response.frame()===page.mainFrame())status=response.status();
+      if(platform!=='x'||!response.ok()||!/(UserTweets|TweetDetail|UserByScreenName)/.test(response.url())||networkData.length>=8)return;
+      const task=(async()=>{try{const body=await response.text();if(body.length>1_000_000||bytes+body.length>2_000_000)return;const json=JSON.parse(body);bytes+=body.length;networkData.push(JSON.stringify(json).replaceAll('<','\\u003c'));}catch{/* Una respuesta ilegible no es una métrica cero. */}})();pending.push(task);
+    });
+    try{await page.goto(url,{waitUntil:'domcontentloaded',timeout:20000});}
+    catch(e){throw new ScanError(e instanceof Error?e.message:'No se pudo navegar.',status,{platform,sessionLoaded:hasSession});}
+    if(status>=400)throw new ScanError(`${platform==='x'?'X':platform} respondió HTTP ${status}. ${platform==='x'?hasSession?'Renueva la sesión con npm run social:login -- x y reintenta.':'Guarda una sesión con npm run social:login -- x y reintenta.':'Reintenta más tarde.'}`,status,{platform,sessionLoaded:hasSession});
+    const fragments:string[]=[];
+    if(platform==='x'){
+      if(/\/i\/flow\/login|\/account\/access/.test(page.url()))throw new ScanError('X requiere iniciar sesión o confirmar el acceso. Ejecuta npm run social:login -- x.',status,{platform,sessionLoaded:hasSession});
+      await page.locator('article[data-testid="tweet"]').first().waitFor({timeout:10000}).catch(()=>undefined);
+      for(let step=0;step<3;step++){
+        fragments.push(await page.locator('article[data-testid="tweet"]').evaluateAll(nodes=>nodes.map(node=>node.outerHTML).join('')));
+        if(step<2){await page.mouse.wheel(0,850);await page.waitForTimeout(700);}
+      }
+      await Promise.race([Promise.allSettled(pending),page.waitForTimeout(1500)]);
+    }else await page.waitForTimeout(2500);
+    let html=await page.content();
+    if(platform==='x')html+=fragments.join('')+networkData.map(data=>`<script type="application/json">${data}</script>`).join('');
+    if(Buffer.byteLength(html)>7_000_000)throw new ScanError('La página renderizada supera 7 MB.',status);
+    return {html,status,finalUrl:page.url(),hasSession};
   } catch(e) {
     if(e instanceof Error && /Executable doesn't exist/.test(e.message))throw new Error('Instala Chromium con npm run browser:install.');
     throw e;

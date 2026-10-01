@@ -16,6 +16,8 @@ La persistencia conserva Supabase. Puedes usar tu instancia existente o una inst
 
 Es preferible guardar una sesión del navegador en vez de guardar usuario y contraseña en variables de entorno. Para cada red ejecuta en tu equipo:
 
+Si Chromium no permite iniciar sesión, puedes exportar la sesión que ya tienes abierta en Chrome o Edge con la extensión local incluida en `browser-extension`. Sigue `browser-extension/README.md`: cargar descomprimida, abrir la pestaña de la red, pulsar Guardar y elegir `.local/sessions`. No requiere abrir otro navegador ni habilitar depuración remota. Los archivos privados de sesión no forman parte de los commits.
+
 ```powershell
 npm run social:login -- instagram
 npm run social:login -- x
@@ -40,7 +42,17 @@ Los archivos se guardan en `.local/sessions/<red>.json`. La aplicación los carg
 - Las recomendaciones indican, según los datos, cambios de seguidores, textos modificados, revisión de publicaciones fuera de muestra o formatos con mayor proporción de likes + comentarios por vista. No infieren horarios óptimos, sentimiento o causalidad sin datos para respaldarlos.
 - El informe muestra estadísticas, variaciones, recomendaciones e historial. El CSV exporta el listado y seguidores disponibles.
 
-## Límites reales
+## Ranking de repercusión
+
+El dashboard reúne la última muestra de cada enlace y permite elegir una red. Si la misma publicación aparece en un perfil y también en una URL directa, se conserva su lectura más reciente y se cuenta una sola vez. Puedes ordenar por interacciones, vistas o tasa por vista y filtrar videos, posts o contenido sin clasificar. Los registros anteriores se pueden usar sin una nueva migración.
+
+Interacciones observadas = likes (o reacciones cuando están disponibles) + comentarios + compartidos. Reacciones reemplaza likes, porque puede incluirlos. Si falta un contador, la suma y la tasa llevan un asterisco de lectura parcial. No es una medida de todas las acciones posibles ni de usuarios únicos. Tasa por vista = interacciones observadas / vistas × 100. Puede superar 100% y solo debe interpretarse según la disponibilidad de datos y dentro de la misma red.
+
+En el informe de un enlace puedes ordenar por crecimiento entre controles y abrir “Ver evolución” para seguir una publicación en el historial disponible. El crecimiento solo compara la misma publicación y los mismos contadores; publicaciones nuevas o métricas que aparecen/desaparecen no generan una variación ficticia. Los valores negativos se conservan como correcciones de contadores. El ranking se exporta a CSV.
+
+Para X, un HTTP 403 ahora se conserva como 403 en el historial y se indica si se cargó una sesión. Ejecuta `npm run social:login -- x` si hace falta iniciar sesión o renovarla. El extractor espera publicaciones, toma una muestra tras desplazarse y observa los datos de las respuestas que la propia página solicita. No fuerza acceso cuando X responde 403. La cobertura real continúa dependiendo de la sesión y de lo que X permita leer.
+
+## Límites de la extracción
 
 La extracción de redes es de mejor esfuerzo: puede fallar por cambios de interfaz, perfiles privados, desafíos de acceso o datos que la red no expone. Una sesión puede ayudar, pero no garantiza todos los contadores. Facebook se apoya en datos JSON públicos y JSON-LD cuando existen; su cobertura será variable. No se usan proxies comerciales, soluciones CAPTCHA ni evasión de restricciones. Los contadores abreviados son aproximados y los cambios pequeños pueden no verse. Esta versión no descarga imágenes ni analiza el contenido de audio/video.
 

@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { detectPlatform, type Platform } from './platform';
 
 export type Metrics = Record<string,number>;
-export type Post = {id:string;text:string;url:string;metrics:Metrics};
+export type Post = {id:string;text:string;url:string;metrics:Metrics;kind?:'video'|'post'|'unknown';publishedAt?:string};
 export type SocialSnapshot = {version:1;platform:Platform;metrics:Metrics;posts:Post[];coverage:'partial'|'available';notes:string[]};
 type Row=Record<string,unknown>;
 function obj(value:unknown):Row{return value && typeof value==='object' && !Array.isArray(value)?value as Row:{};}
@@ -37,7 +37,7 @@ export function extractSocial(html:string,url:string):SocialSnapshot {
   if(depth>35||++visits>40000)return;
   if(Array.isArray(value)){for(const child of value)visit(child,depth+1);return;}
   const row=obj(value);if(!Object.keys(row).length)return;
-  const stats={...counts(row),...counts(obj(row.stats)),...counts(obj(row.legacy))};
+  const stats={...counts(row),...counts(obj(row.stats)),...counts(obj(row.legacy))};const viewCount=parseCount(obj(row.views).count);if(viewCount!==undefined)stats.views=viewCount;
   const username=str(row.username||row.uniqueId||row.screen_name||obj(row.legacy).screen_name);
   if(!isPost&&username&&username.toLowerCase()===handle)Object.assign(metrics,stats);
   const userInfo=obj(row.userInfo);const user=obj(userInfo.user);
@@ -48,15 +48,17 @@ export function extractSocial(html:string,url:string):SocialSnapshot {
   const content=str(row.desc||row.full_text||legacy.full_text||caption||captionObj.text||obj(row.message).text||(typeof row.caption==='string'?row.caption:''));
   const id=str(row.shortcode||row.shortCode||row.rest_id||row.id_str||row.post_id||row.pk||row.id);
   if(id && content && Object.keys(stats).some(k=>['likes','comments','shares','views','reactions'].includes(k))){
-   const author=obj(row.author||row.owner||row.user);const authorName=str(author.uniqueId||author.username||author.screen_name);
+   const author=obj(row.author||row.owner||row.user||obj(obj(obj(row.core).user_results).result));const authorName=str(author.uniqueId||author.username||author.screen_name||obj(author.legacy).screen_name);
    const postUrl=str(row.url||row.webVideoUrl)|| (platform==='instagram'?`https://www.instagram.com/p/${str(row.shortcode||row.shortCode)}/`:platform==='tiktok'?`https://www.tiktok.com/@${authorName}/video/${id}`:platform==='x'?`https://x.com/${authorName||handle}/status/${id}`:url);
-   add({id:platform==='instagram'?str(row.shortcode||row.shortCode)||id:id,text:content.slice(0,10000),url:postUrl,metrics:stats},authorName);
+   const media=obj(row.extended_entities||legacy.extended_entities).media;const isVideo=platform==='tiktok'||row.is_video===true||Number(row.media_type)===2||row.video!==undefined||Array.isArray(media)&&media.some(item=>['video','animated_gif'].includes(str(obj(item).type)));
+   add({id:platform==='instagram'?str(row.shortcode||row.shortCode)||id:id,text:content.slice(0,10000),url:postUrl,metrics:stats,kind:isVideo?'video':platform==='x'||row.is_video===false||row.media_type===1?'post':'unknown',publishedAt:str(row.createTimeISO||row.taken_at_timestamp||row.createTime||row.created_at||legacy.created_at)||undefined},authorName);
+   return; // Evita volver a agregar el legacy de un autor filtrado como si fuese propio.
   }
   // JSON-LD de una publicación: contadores semánticos, sin adivinar números.
   if(row['@type']==='SocialMediaPosting'||row['@type']==='VideoObject'){
    const interactions=Array.isArray(row.interactionStatistic)?row.interactionStatistic:[];const postMetrics:Metrics={};
    for(const entry of interactions){const interaction=obj(entry);const kind=str(obj(interaction.interactionType)['@type']||interaction.interactionType);const key=/LikeAction/.test(kind)?'likes':/CommentAction/.test(kind)?'comments':/WatchAction|ViewAction/.test(kind)?'views':/ShareAction/.test(kind)?'shares':undefined;const count=parseCount(interaction.userInteractionCount);if(key&&count!==undefined)postMetrics[key]=count;}
-   const postUrl=str(row.url||row['@id']);if(isPost&&Object.keys(postMetrics).length)add({id:postId||postUrl,text:str(row.articleBody||row.description||row.name),url:postUrl||url,metrics:postMetrics});
+   const postUrl=str(row.url||row['@id']);if(isPost&&Object.keys(postMetrics).length)add({id:postId||postUrl,text:str(row.articleBody||row.description||row.name),url:postUrl||url,metrics:postMetrics,kind:row['@type']==='VideoObject'?'video':'post',publishedAt:str(row.datePublished||row.uploadDate)||undefined});
   }
   for(const child of Object.values(row))if(child&&typeof child==='object')visit(child,depth+1);
  }
@@ -65,10 +67,10 @@ export function extractSocial(html:string,url:string):SocialSnapshot {
  if(!isPost)Object.assign(metrics,visibleCounts(description));
  if(platform==='x'){
   $('article[data-testid="tweet"]').each((_i,element)=>{
-   const article=$(element);const link=article.find('a[href*="/status/"]').filter((_j,a)=>!($(a).attr('href')||'').includes('/photo/')).first().attr('href')||'';const match=link.match(/^\/([^/]+)\/status\/(\d+)/);if(!match)return;
-   const postMetrics:Metrics={};for(const[key,testid]of Object.entries({likes:'like',comments:'reply',shares:'retweet'})){const button=article.find(`[data-testid="${testid}"]`);const label=button.attr('aria-label')||button.closest('[aria-label]').attr('aria-label')||button.text();const n=parseCount(label.match(/[\d.,]+\s*[KMB]?/i)?.[0]);if(n!==undefined)postMetrics[key]=n;}
+   const article=$(element);const link=article.find('a[href*="/status/"]').filter((_j,a)=>Boolean($(a).find('time').length)).first().attr('href')||article.find('a[href*="/status/"]').filter((_j,a)=>!/\/(photo|video|analytics)\//.test($(a).attr('href')||'')).first().attr('href')||'';let path;try{path=new URL(link,'https://x.com').pathname;}catch{return;}const match=path.match(/^\/([^/]+)\/status\/(\d+)/);if(!match)return;
+   const postMetrics:Metrics={};for(const[key,testid]of Object.entries({likes:'like',comments:'reply',shares:'retweet'})){const button=article.find(`[data-testid="${testid}"], [data-testid="un${testid}"]`).first();const label=button.attr('aria-label')||button.closest('[aria-label]').attr('aria-label')||button.text();const n=parseCount(label.match(/[\d.,]+\s*[KMB]?/i)?.[0]);if(n!==undefined)postMetrics[key]=n;}
    const analytics=article.find('a[href$="/analytics"]');const views=parseCount((analytics.attr('aria-label')||analytics.text()).match(/[\d.,]+\s*[KMB]?/i)?.[0]);if(views!==undefined)postMetrics.views=views;
-   add({id:match[2],text:article.find('[data-testid="tweetText"]').text().trim(),url:`https://x.com${link}`,metrics:postMetrics},match[1]);
+   const existing=posts.get(match[2]);add({id:match[2],text:article.find('[data-testid="tweetText"]').first().text().trim()||existing?.text||'',url:`https://x.com/${match[1]}/status/${match[2]}`,metrics:{...existing?.metrics,...postMetrics},kind:article.find('video,[data-testid="videoPlayer"]').length?'video':existing?.kind||'post',publishedAt:article.find('time').first().attr('datetime')||existing?.publishedAt},match[1]);
   });
   if(!isPost)for(const[key,path]of Object.entries({followers:'/followers',following:'/following'})){const a=$(`a[href="/${handle}${path}"]`);const n=parseCount(a.find('span').first().text());if(n!==undefined)metrics[key]=n;}
  }

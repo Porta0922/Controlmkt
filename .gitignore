@@ -4,3 +4,8 @@ node_modules/
 !.env.example
 *.tsbuildinfo
 .local/
+# Protege también exportaciones de sesión guardadas accidentalmente en la raíz.
+/x.json
+/instagram.json
+/tiktok.json
+/facebook.json

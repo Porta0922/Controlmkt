@@ -42,7 +42,7 @@ test('Cambios de métricas generan alerta aunque el texto no cambie',()=>{
  const result={status:200,title:'TikTok',content:'Uno',hash:'stable',provider:'playwright' as const,platform:'tiktok' as const,snapshot:baseline};
  const old={hash:'stable',provider:'playwright',platform:'tiktok',snapshot:{...baseline,metrics:{followers:90}}};const analysis=analyze(result,old);
  assert.equal(analysis.health,'alert');assert.equal(analysis.ai_analysis_result.changed,false);assert.equal(analysis.ai_analysis_result.metricsChanged,true);
- assert.equal(analyze(result).ai_analysis_result.recommendations[0].includes('referencia'),true);
+ assert.ok(analyze(result).ai_analysis_result.recommendations.some(t=>t.includes('referencia')));
 });
 test('Recomendación de contenido solo con una muestra comparable suficiente',()=>{
  const snapshot={...baseline,posts:[1,2,3].map(id=>({id:String(id),text:'Video',url:'https://tiktok.com',metrics:{likes:id*10,comments:2,views:1000}}))};const tips=recommendations(snapshot,compareSocial(snapshot,snapshot),true);assert.ok(tips.some(t=>t.includes('3 tiene la mayor proporción')));
