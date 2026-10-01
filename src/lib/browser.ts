@@ -69,10 +69,10 @@ export async function renderPage(url: string) {
     });
     try{await page.goto(url,{waitUntil:'domcontentloaded',timeout:20000});}
     catch(e){const closed=e instanceof Error&&/Target page, context or browser has been closed/.test(e.message);throw new ScanError(closed?'El navegador de lectura se cerró inesperadamente. Reintenta la actualización.':`No se pudo abrir ${platform==='web'?'la página':platform}. Reintenta en unos momentos.`,status,{platform,sessionLoaded:hasSession,reason:closed?'browser_closed':'navigation_failed'});}
-    if(status>=400)throw new ScanError(`${platform==='x'?'X':platform} respondió HTTP ${status}. ${platform==='x'?hasSession?'Renueva la sesión con npm run social:login -- x y reintenta.':'Guarda una sesión con npm run social:login -- x y reintenta.':'Reintenta más tarde.'}`,status,{platform,sessionLoaded:hasSession});
+    if(status>=400)throw new ScanError(`${platform==='x'?'X':platform} no permitió acceder a los datos. ${platform==='x'?'Importa o renueva su sesión desde Conectar redes y vuelve a actualizar.':'Reintenta más tarde o revisa su sesión en Conectar redes.'}`,status,{platform,sessionLoaded:hasSession});
     const fragments:string[]=[];
     if(platform==='x'){
-      if(/\/i\/flow\/login|\/account\/access/.test(page.url()))throw new ScanError('X requiere iniciar sesión o confirmar el acceso. Ejecuta npm run social:login -- x.',status,{platform,sessionLoaded:hasSession});
+      if(/\/i\/flow\/login|\/account\/access/.test(page.url()))throw new ScanError('X requiere confirmar el acceso. Inicia sesión en tu navegador y vuelve a importar su sesión desde Conectar redes.',status,{platform,sessionLoaded:hasSession});
       await page.locator('article[data-testid="tweet"]').first().waitFor({timeout:10000}).catch(()=>undefined);
       for(let step=0;step<3;step++){
         fragments.push(await page.locator('article[data-testid="tweet"]').evaluateAll(nodes=>nodes.map(node=>node.outerHTML).join('')));
