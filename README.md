@@ -80,3 +80,7 @@ El modo completo con navegador está pensado para tu PC o un servidor Node que p
 El login administrativo es una sesión firmada de ocho horas; no utiliza Supabase Auth. Antes de exponer la aplicación configura una contraseña propia con `ADMIN_PASSWORD`. `SUPABASE_SERVICE_ROLE_KEY` se usa solo en servidor y RLS bloquea el acceso directo de clientes a las tablas.
 
 Referencias: [Playwright: navegadores](https://playwright.dev/docs/browsers), [Supabase local](https://supabase.com/docs/guides/local-development) y [Next.js App Router](https://nextjs.org/docs/app/getting-started/installation).
+
+### Importar sesiones desde el panel
+
+Abre **Conectar redes** e importa el archivo JSON de la red que exportaste con la extensión. Se valida el dominio y la presencia de una cookie de acceso vigente. El servidor crea un bucket privado `controlmkt-sessions` en Supabase Storage y guarda cada sesión cifrada con AES-256-GCM, con una clave derivada de `SESSION_SECRET`. Solo los endpoints autenticados del administrador acceden a estos archivos mediante la service role; no se devuelven cookies al navegador. No hacen falta migraciones nuevas. Si cambias SESSION_SECRET, debes importar las sesiones de nuevo. La importación tiene prioridad sobre las variables SOCIAL_SESSION_* y los archivos locales; eliminarla puede volver a activar esas alternativas si las configuraste. No se garantiza que una sesión importada sea aceptada desde Vercel.

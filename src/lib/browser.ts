@@ -7,6 +7,7 @@ import { detectPlatform } from './platform';
 import { resolve } from 'node:path';
 import { access } from 'node:fs/promises';
 import { ScanError } from './scan-error';
+import { loadStoredSession } from './stored-sessions';
 import { parseNetworkData } from './network-data';
 // Todas las conexiones del navegador pasan por este proxy local. Se resuelve y
 // fija la IP pública para evitar accesos a la red privada y DNS rebinding.
@@ -49,8 +50,9 @@ export async function renderPage(url: string) {
     const platform=detectPlatform(url);
     const sessionPath=resolve(process.env.SOCIAL_SESSION_DIR||'.local/sessions',`${platform}.json`);
     const sessionEnv=platform==='web'?undefined:process.env[`SOCIAL_SESSION_${platform.toUpperCase()}`];
-    const hasSession=!!sessionEnv || platform!=='web'&&await access(sessionPath).then(()=>true,()=>false);
-    const storageState=sessionEnv?JSON.parse(sessionEnv):sessionPath;
+    const importedSession=platform==='web'?undefined:await loadStoredSession(platform);
+    const hasSession=!!importedSession||!!sessionEnv || platform!=='web'&&await access(sessionPath).then(()=>true,()=>false);
+    const storageState=importedSession||(sessionEnv?JSON.parse(sessionEnv):sessionPath);
     const context = await browser.newContext({locale:'en-US',viewport:{width:1280,height:900},serviceWorkers:'block',acceptDownloads:false,...(hasSession?{storageState}:{})});
     await context.route('**/*',async route=>{
       if (['image','media','font'].includes(route.request().resourceType()) || !/^https?:/.test(route.request().url())) return route.abort();

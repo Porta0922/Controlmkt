@@ -20,3 +20,5 @@ test('TikTok conserva videos sin descripción y statsV2',()=>{
  assert.equal(snapshot.metrics.followers,900);assert.equal(snapshot.posts[0].metrics.comments,2);
 });
 test('Respuestas Relay con prefijo y múltiples objetos',()=>{assert.deepEqual(parseNetworkData('for (;;);\n{"a":1}\n{"b":2}'),[{a:1},{b:2}]);});
+
+test("X: Me gusta no convierte cuatro likes en cuatro millones",()=>{const snapshot=extractSocial('<article data-testid="tweet"><a href="/brand/status/123">Fecha</a><div data-testid="tweetText">Oferta</div><button data-testid="like" aria-label="4 Me gusta"></button></article>','https://x.com/brand');assert.equal(snapshot.posts[0].metrics.likes,4);});
