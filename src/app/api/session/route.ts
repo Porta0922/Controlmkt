@@ -1,0 +1,4 @@
+import { NextResponse } from 'next/server';
+import { token } from '@/lib/auth';
+export async function POST(request: Request) { try { const {username,password} = await request.json(); if (username !== (process.env.ADMIN_USERNAME || 'admin') || password !== (process.env.ADMIN_PASSWORD || 'admin')) return NextResponse.json({error:'Credenciales incorrectas.'},{status:401}); const response = NextResponse.json({ok:true}); response.cookies.set('session',token(),{httpOnly:true,secure:process.env.NODE_ENV === 'production',sameSite:'strict',path:'/',maxAge:28800}); return response; } catch { return NextResponse.json({error:'No se pudo iniciar sesión. Revisa SESSION_SECRET.'},{status:400}); } }
+export async function DELETE() { const response = NextResponse.json({ok:true}); response.cookies.delete('session'); return response; }
